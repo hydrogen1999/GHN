@@ -55,20 +55,30 @@ class AlphaRePU(nn.Module):
             # This maintains continuity and has non-zero gradient everywhere
             
             # Gradient at x=0 from right side: α * (0 + c)^(α-1) = α * c^(α-1)
-            grad_at_zero = self.alpha * (self.c ** (self.alpha - 1))
+
+            ######### IGNORE
+            # grad_at_zero = self.alpha * (self.c ** (self.alpha - 1))
             
-            base = F.relu(x + self.c) 
-            positive_part = torch.pow(base, self.alpha)
+            # base = F.relu(x + self.c) 
+            # positive_part = torch.pow(base, self.alpha)
             
-            # Linear extension for negative part
-            negative_part = self._c_alpha + grad_at_zero * x
+            # # Linear extension for negative part
+            # negative_part = self._c_alpha + grad_at_zero * x
             
-            return torch.where(x >= 0, positive_part, negative_part)
+            # return torch.where(x >= 0, positive_part, negative_part)
+            pass
         else:
             # Original strict definition (may cause dying neurons)
-            base = F.relu(x + self.c)
-            positive_part = torch.pow(base, self.alpha)
-            return torch.where(x >= 0, positive_part, self._c_alpha * torch.ones_like(x))
+            # base = F.relu(x + self.c)
+            # positive_part = torch.pow(base, self.alpha)
+            # return torch.where(x >= 0, positive_part, self._c_alpha * torch.ones_like(x))
+            positive_part = torch.pow(F.relu(x + self.c), self.alpha)
+            constant_part = self._c_alpha
+            
+            # Using torch.where is correct for the forward pass.
+            # PyTorch autograd will generate 0 gradient for the False branch (constant_part)
+            # which matches the paper's requirement σ'(x)=0 for x<0.
+            return torch.where(x >= 0, positive_part, torch.ones_like(x) * constant_part)
     
     def holder_seminorm(self) -> float:
         """Return the Hölder seminorm [σ_{α,c}]_α = 1."""

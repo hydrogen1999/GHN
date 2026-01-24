@@ -67,7 +67,7 @@ class GraphHolderLayer(nn.Module):
             self.batch_norm = None
         
         # α-RePU activation (smooth version to avoid dying neurons)
-        self.activation = AlphaRePU(alpha=alpha, c=c, smooth=True)
+        self.activation = AlphaRePU(alpha=alpha, c=c, smooth=False) ##########
         
         # Cache for normalized adjacency
         self._cached_adj_norm = None
@@ -319,8 +319,12 @@ class GraphHolderNetwork(nn.Module):
         
         # Pass through GHN layers
         h = x
+        if self.dropout_p > 0:
+            h = F.dropout(h, p=self.dropout_p, training=self.training)
+
         for i, layer in enumerate(self.layers):
-            h = self.dropout(h) if i > 0 else h
+            if i > 0 and self.dropout_p > 0:
+                h = F.dropout(h, p=self.dropout_p, training=self.training)
             h = layer(h, adj, adj_normalized=adj_normalized)
         
         # Readout layer
