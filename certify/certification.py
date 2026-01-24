@@ -1,0 +1,384 @@
+"""
+Certification Module
+
+Provides utilities for computing certified robustness radii
+and certified accuracy metrics.
+"""
+
+import torch
+import torch.nn.functional as F
+from torch import Tensor
+from typing import Tuple, Dict, List, Optional
+import numpy as np
+from tqdm import tqdm
+
+
+def compute_classification_margin(
+    logits: Tensor,
+    true_label: int,
+) -> float:
+    """
+    Compute classification margin γ = f_y - max_{k≠y} f_k.
+    
+    Args:
+        logits: Output logits [C]
+        true_label: Ground truth label
+        
+    Returns:
+        Classification margin (negative if misclassified)
+    """
+    logits = logits.detach().cpu()
+    pred_label = logits.argmax().item()
+    
+    logits_sorted, _ = torch.sort(logits, descending=True)
+    
+    if pred_label == true_label:
+        # Correct prediction
+        true_logit = logits[true_label]
+        # Runner-up is second highest
+        if logits_sorted[0] == true_logit:
+            runner_up = logits_sorted[1]
+        else:
+            runner_up = logits_sorted[0]
+        margin = (true_logit - runner_up).item()
+    else:
+        # Incorrect prediction
+        margin = (logits[true_label] - logits_sorted[0]).item()
+    
+    return margin
+
+
+def compute_holder_certified_radius(
+    margin: float,
+    holder_constant: float,
+    alpha_net: float,
+) -> float:
+    """
+    Compute certified radius for Hölder networks.
+    
+    R = (γ / (2 * C_net))^{1/α_net}
+    
+    This scales super-linearly with margin when α_net < 1.
+    
+    Args:
+        margin: Classification margin γ
+        holder_constant: Network Hölder constant C_net
+        alpha_net: Global Hölder exponent α^L
+        
+    Returns:
+        Certified L2 radius
+    """
+    if margin <= 0:
+        return 0.0
+    
+    return (margin / (2 * holder_constant)) ** (1 / alpha_net)
+
+
+def compute_lipschitz_certified_radius(
+    margin: float,
+    lipschitz_constant: float,
+) -> float:
+    """
+    Compute certified radius for Lipschitz networks.
+    
+    R = γ / (2K)
+    
+    This scales linearly with margin.
+    
+    Args:
+        margin: Classification margin γ
+        lipschitz_constant: Network Lipschitz constant K
+        
+    Returns:
+        Certified L2 radius
+    """
+    if margin <= 0:
+        return 0.0
+    
+    return margin / (2 * lipschitz_constant)
+
+
+def compute_network_holder_constant(
+    model,
+    alpha: float,
+) -> float:
+    """
+    Compute network Hölder constant C_net = Π_l ||W^{(l)}||_2^α.
+    
+    Args:
+        model: GHN model with layers attribute
+        alpha: Layer-wise Hölder exponent
+        
+    Returns:
+        Network Hölder constant
+    """
+    c_net = 1.0
+    
+    for layer in model.layers:
+        if hasattr(layer, 'get_spectral_norm'):
+            spectral_norm = layer.get_spectral_norm()
+            c_net *= spectral_norm ** alpha
+        elif hasattr(layer, 'weight'):
+            # Fallback: estimate spectral norm via power iteration
+            weight = layer.weight.data
+            u = torch.randn(weight.size(0), device=weight.device)
+            for _ in range(10):
+                v = F.normalize(torch.mv(weight.t(), u), dim=0)
+                u = F.normalize(torch.mv(weight, v), dim=0)
+            spectral_norm = torch.dot(u, torch.mv(weight, v)).item()
+            c_net *= spectral_norm ** alpha
+    
+    # Include readout layer if exists
+    if hasattr(model, 'readout'):
+        weight = model.readout.weight.data
+        u = torch.randn(weight.size(1), device=weight.device)
+        for _ in range(10):
+            v = F.normalize(torch.mv(weight.t(), u), dim=0)
+            u = F.normalize(torch.mv(weight, v), dim=0)
+        readout_norm = torch.dot(u, torch.mv(weight, v)).item()
+        c_net *= readout_norm
+    
+    return c_net
+
+
+def compute_network_lipschitz_constant(model) -> float:
+    """
+    Compute network Lipschitz constant K = Π_l ||W^{(l)}||_2.
+    
+    Args:
+        model: Model with layers attribute
+        
+    Returns:
+        Network Lipschitz constant
+    """
+    k = 1.0
+    
+    for name, param in model.named_parameters():
+        if 'weight' in name and param.dim() == 2:
+            weight = param.data
+            # Power iteration
+            u = torch.randn(weight.size(0), device=weight.device)
+            for _ in range(10):
+                v = F.normalize(torch.mv(weight.t(), u), dim=0)
+                u = F.normalize(torch.mv(weight, v), dim=0)
+            spectral_norm = torch.dot(u, torch.mv(weight, v)).item()
+            k *= spectral_norm
+    
+    return k
+
+
+@torch.no_grad()
+def certify_single_node(
+    model,
+    x: Tensor,
+    adj: Tensor,
+    node_idx: int,
+    true_label: int,
+    model_type: str = 'ghn',
+    alpha: float = 0.8,
+    num_layers: int = 2,
+) -> Tuple[bool, float, float]:
+    """
+    Certify a single node.
+    
+    Args:
+        model: Trained model
+        x: Node features [n, d]
+        adj: Adjacency matrix [n, n]
+        node_idx: Target node index
+        true_label: Ground truth label
+        model_type: One of 'ghn', 'lipschitz', 'gcn'
+        alpha: Hölder exponent (for GHN)
+        num_layers: Network depth
+        
+    Returns:
+        (is_correct, margin, certified_radius)
+    """
+    model.eval()
+    
+    # Forward pass
+    logits = model(x, adj)
+    node_logits = logits[node_idx]
+    
+    # Check correctness
+    pred_label = node_logits.argmax().item()
+    is_correct = pred_label == true_label
+    
+    # Compute margin
+    margin = compute_classification_margin(node_logits, true_label)
+    
+    if not is_correct:
+        return False, margin, 0.0
+    
+    # Compute certified radius based on model type
+    if model_type == 'ghn':
+        alpha_net = alpha ** num_layers
+        c_net = compute_network_holder_constant(model, alpha)
+        radius = compute_holder_certified_radius(margin, c_net, alpha_net)
+    elif model_type == 'lipschitz':
+        k = compute_network_lipschitz_constant(model)
+        radius = compute_lipschitz_certified_radius(margin, k)
+    else:
+        # For standard GCN, compute Lipschitz constant post-hoc
+        k = compute_network_lipschitz_constant(model)
+        radius = compute_lipschitz_certified_radius(margin, k)
+    
+    return True, margin, radius
+
+
+@torch.no_grad()
+def certify_all_nodes(
+    model,
+    x: Tensor,
+    adj: Tensor,
+    labels: Tensor,
+    test_mask: Tensor,
+    model_type: str = 'ghn',
+    alpha: float = 0.8,
+    num_layers: int = 2,
+    verbose: bool = True,
+) -> Dict[str, float]:
+    """
+    Certify all test nodes and compute metrics.
+    
+    Args:
+        model: Trained model
+        x: Node features [n, d]
+        adj: Adjacency matrix [n, n]
+        labels: Node labels [n]
+        test_mask: Boolean mask for test nodes [n]
+        model_type: Model type for certification
+        alpha: Hölder exponent
+        num_layers: Network depth
+        verbose: Show progress bar
+        
+    Returns:
+        Dictionary with metrics:
+        - clean_accuracy
+        - certified_accuracy@{r} for various radii
+        - average_certified_radius (ACR)
+    """
+    model.eval()
+    
+    test_indices = test_mask.nonzero().squeeze(-1).tolist()
+    
+    correct_count = 0
+    certified_radii = []
+    margins = []
+    
+    iterator = tqdm(test_indices, desc="Certifying") if verbose else test_indices
+    
+    for idx in iterator:
+        true_label = labels[idx].item()
+        
+        is_correct, margin, radius = certify_single_node(
+            model, x, adj, idx, true_label,
+            model_type=model_type,
+            alpha=alpha,
+            num_layers=num_layers,
+        )
+        
+        if is_correct:
+            correct_count += 1
+            certified_radii.append(radius)
+            margins.append(margin)
+    
+    n_test = len(test_indices)
+    n_correct = correct_count
+    
+    # Metrics
+    clean_accuracy = n_correct / n_test
+    
+    # Average certified radius (over correctly classified)
+    acr = np.mean(certified_radii) if certified_radii else 0.0
+    
+    # Certified accuracy at various radii
+    certified_radii = np.array(certified_radii)
+    radii_thresholds = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3]
+    
+    results = {
+        'clean_accuracy': clean_accuracy,
+        'average_certified_radius': acr,
+        'num_test': n_test,
+        'num_correct': n_correct,
+    }
+    
+    for r in radii_thresholds:
+        cert_acc = np.sum(certified_radii >= r) / n_test
+        results[f'certified_accuracy@{r}'] = cert_acc
+    
+    # Margin statistics
+    if margins:
+        results['mean_margin'] = np.mean(margins)
+        results['median_margin'] = np.median(margins)
+        results['std_margin'] = np.std(margins)
+    
+    return results
+
+
+def compare_scaling_behavior(
+    margins: np.ndarray,
+    alpha_net: float,
+    holder_constant: float,
+    lipschitz_constant: float,
+) -> Dict[str, np.ndarray]:
+    """
+    Compare certified radius scaling between Hölder and Lipschitz.
+    
+    Demonstrates super-linear vs linear scaling.
+    
+    Args:
+        margins: Array of classification margins
+        alpha_net: Global Hölder exponent
+        holder_constant: Network Hölder constant
+        lipschitz_constant: Network Lipschitz constant
+        
+    Returns:
+        Dictionary with Hölder and Lipschitz radii arrays
+    """
+    # Hölder: R = (γ / 2C)^{1/α}
+    holder_radii = np.where(
+        margins > 0,
+        np.power(margins / (2 * holder_constant), 1 / alpha_net),
+        0.0
+    )
+    
+    # Lipschitz: R = γ / 2K
+    lipschitz_radii = np.where(
+        margins > 0,
+        margins / (2 * lipschitz_constant),
+        0.0
+    )
+    
+    return {
+        'margins': margins,
+        'holder_radii': holder_radii,
+        'lipschitz_radii': lipschitz_radii,
+        'holder_advantage': holder_radii / (lipschitz_radii + 1e-10),
+    }
+
+
+class CertificationCache:
+    """
+    Cache for certification results to avoid recomputation.
+    """
+    
+    def __init__(self):
+        self._cache = {}
+    
+    def get(self, key: str) -> Optional[Dict]:
+        return self._cache.get(key)
+    
+    def set(self, key: str, value: Dict):
+        self._cache[key] = value
+    
+    def clear(self):
+        self._cache.clear()
+    
+    @staticmethod
+    def make_key(
+        model_name: str,
+        dataset_name: str,
+        seed: int,
+    ) -> str:
+        return f"{model_name}_{dataset_name}_{seed}"
