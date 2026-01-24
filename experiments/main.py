@@ -260,12 +260,13 @@ def run_figure1(
         # Compute CA curve
         radii_range = np.linspace(0, 0.3, 50)
         ca_curve = []
+        test_labels = data.y[data.test_mask]
         for r in radii_range:
             ca = certified_accuracy_at_radius(
-                torch.tensor(cert['radii']),
-                torch.tensor(cert['predictions']),
-                data.y[data.test_mask],
-                r,
+            torch.tensor(cert['radii']),
+            torch.tensor(cert['predictions']),
+            test_labels.cpu(),
+            r,
             )
             ca_curve.append(ca)
         

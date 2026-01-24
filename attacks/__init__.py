@@ -259,7 +259,7 @@ class Nettack:
                     adj_pert[target_node, best_flip] = 1
                     adj_pert[best_flip, target_node] = 1
         
-        return self._normalize_adj(adj_pert)
+        return adj_pert
     
     def _normalize_adj(self, adj: Tensor) -> Tensor:
         """Symmetric normalization: D^{-1/2} A D^{-1/2}"""
@@ -360,7 +360,7 @@ class Metattack:
                     adj_pert[i, j] = 1
                     adj_pert[j, i] = 1
         
-        return self._normalize_adj(adj_pert)
+        return adj_pert
     
     def _normalize_adj(self, adj: Tensor) -> Tensor:
         """Symmetric normalization."""
@@ -421,7 +421,7 @@ class BernoulliEdgeDeletion:
         adj_pert = adj.clone()
         adj_pert[delete_mask > 0.5] = 0
         
-        return self._normalize_adj(adj_pert)
+        return adj_pert
     
     def _normalize_adj(self, adj: Tensor) -> Tensor:
         """Symmetric normalization."""

@@ -205,3 +205,4 @@ MODELS = [
     'randomized_smoothing', 'gnncert',
     'gnnguard', 'robustgcn',
 ]
+DATASETS = list(DATASET_CONFIGS.keys())

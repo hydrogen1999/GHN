@@ -237,7 +237,7 @@ def certify_all_nodes(
     alpha: float = 0.8,
     num_layers: int = 2,
     verbose: bool = True,
-) -> Dict[str, float]:
+) -> Dict[str, Any]:
     """
     Certify all test nodes and compute metrics.
     
@@ -268,6 +268,7 @@ def certify_all_nodes(
     
     iterator = tqdm(test_indices, desc="Certifying") if verbose else test_indices
     
+    all_predictions = []
     for idx in iterator:
         true_label = labels[idx].item()
         
@@ -277,12 +278,16 @@ def certify_all_nodes(
             alpha=alpha,
             num_layers=num_layers,
         )
+        pred_label = model(x, adj)[idx].argmax().item()
+        all_predictions.append(pred_label)
         
         if is_correct:
             correct_count += 1
             certified_radii.append(radius)
             margins.append(margin)
-    
+        else:
+            certified_radii.append(0.0)
+            margins.append(margin)
     n_test = len(test_indices)
     n_correct = correct_count
     
@@ -301,6 +306,9 @@ def certify_all_nodes(
         'average_certified_radius': acr,
         'num_test': n_test,
         'num_correct': n_correct,
+        'radii': certified_radii,
+        'predictions': all_predictions,
+        'margins': margins
     }
     
     for r in radii_thresholds:
@@ -317,44 +325,53 @@ def certify_all_nodes(
 
 
 def compare_scaling_behavior(
-    margins: np.ndarray,
-    alpha_net: float,
-    holder_constant: float,
-    lipschitz_constant: float,
+    ghn_model,
+    lipschitz_model,
+    x: Tensor,
+    adj: Tensor,
+    labels: Tensor,
+    test_mask: Tensor,
+    alpha: float,
+    num_layers: int,
 ) -> Dict[str, np.ndarray]:
     """
     Compare certified radius scaling between Hölder and Lipschitz.
-    
-    Demonstrates super-linear vs linear scaling.
-    
-    Args:
-        margins: Array of classification margins
-        alpha_net: Global Hölder exponent
-        holder_constant: Network Hölder constant
-        lipschitz_constant: Network Lipschitz constant
-        
-    Returns:
-        Dictionary with Hölder and Lipschitz radii arrays
     """
-    # Hölder: R = (γ / 2C)^{1/α}
-    holder_radii = np.where(
-        margins > 0,
-        np.power(margins / (2 * holder_constant), 1 / alpha_net),
-        0.0
-    )
-    
-    # Lipschitz: R = γ / 2K
-    lipschitz_radii = np.where(
-        margins > 0,
-        margins / (2 * lipschitz_constant),
-        0.0
-    )
+    # Helper to compute margins and radii
+    def get_data(model, model_type):
+        model.eval()
+        with torch.no_grad():
+            logits = model(x, adj)
+            
+        test_indices = test_mask.nonzero().squeeze(-1)
+        margins = []
+        radii = []
+        
+        for idx in test_indices:
+            idx = idx.item()
+            true_label = labels[idx].item()
+            # Reuse single node logic or inline it for speed
+            node_logits = logits[idx]
+            margin = compute_classification_margin(node_logits, true_label)
+            
+            if model_type == 'ghn':
+                c_net = compute_network_holder_constant(model, alpha)
+                radius = compute_holder_certified_radius(margin, c_net, alpha**num_layers)
+            else:
+                k = compute_network_lipschitz_constant(model)
+                radius = compute_lipschitz_certified_radius(margin, k)
+            
+            margins.append(margin)
+            radii.append(radius)
+        return np.array(margins), np.array(radii)
+
+    ghn_margins, ghn_radii = get_data(ghn_model, 'ghn')
+    lip_margins, lip_radii = get_data(lipschitz_model, 'lipschitz')
     
     return {
-        'margins': margins,
-        'holder_radii': holder_radii,
-        'lipschitz_radii': lipschitz_radii,
-        'holder_advantage': holder_radii / (lipschitz_radii + 1e-10),
+        'margins': ghn_margins,
+        'ghn_radii': ghn_radii,
+        'lipschitz_radii': lip_radii,
     }
 
 

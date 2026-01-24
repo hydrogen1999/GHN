@@ -35,22 +35,33 @@ def accuracy(
 
 
 def certified_accuracy_at_radius(
-    certified_radii: np.ndarray,
+    certified_radii: Tensor,
+    predictions: Tensor,
+    labels: Tensor,
     radius_threshold: float,
-    total_nodes: int,
 ) -> float:
     """
     Compute certified accuracy at a given radius.
-    
-    Args:
-        certified_radii: Array of certified radii (0 for incorrect predictions)
-        radius_threshold: Minimum radius threshold
-        total_nodes: Total number of test nodes
-        
-    Returns:
-        Certified accuracy (fraction of nodes certified at this radius)
+    CA@r = Fraction of nodes that are correct AND have radius >= r
     """
-    return np.sum(certified_radii >= radius_threshold) / total_nodes
+    # Ensure inputs are tensors or numpy arrays
+    if isinstance(certified_radii, list):
+        certified_radii = torch.tensor(certified_radii)
+    if isinstance(predictions, list):
+        predictions = torch.tensor(predictions)
+        
+    n_total = len(labels)
+    if n_total == 0:
+        return 0.0
+
+    # Logic: Correctly classified AND Radius >= Threshold
+    is_correct = (predictions == labels)
+    is_robust = (certified_radii >= radius_threshold)
+    
+    # Note: certified_radii usually is 0 if incorrect, but strict check is better
+    certified_correct = (is_correct & is_robust).float().sum().item()
+    
+    return certified_correct / n_total
 
 
 def average_certified_radius(
