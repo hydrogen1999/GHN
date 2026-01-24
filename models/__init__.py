@@ -69,6 +69,10 @@ MODEL_REGISTRY = {
     'groupsort_gcn': GroupSortGCN,
     'pairnorm_gcn': PairNormGCN,
     
+    # Certified defenses (wrapper models - need special handling)
+    'randomized_smoothing': RandomizedSmoothing,
+    'gnncert': GNNCert,
+    
     # Empirical defenses
     'gnnguard': GNNGuard,
     'robustgcn': RobustGCN,
@@ -91,6 +95,26 @@ def get_model(name: str, **kwargs):
     if name_lower not in MODEL_REGISTRY:
         available = list(MODEL_REGISTRY.keys())
         raise ValueError(f"Unknown model: {name}. Available: {available}")
+    
+    # Handle wrapper models (randomized_smoothing, gnncert)
+    if name_lower in ['randomized_smoothing', 'gnncert']:
+        # These need a base model
+        in_features = kwargs.pop('in_features')
+        out_features = kwargs.pop('out_features')
+        hidden_features = kwargs.pop('hidden_features', 64)
+        num_layers = kwargs.pop('num_layers', 2)
+        dropout = kwargs.pop('dropout', 0.5)
+        
+        # Create base GCN
+        base_model = GCN(
+            in_features=in_features,
+            out_features=out_features,
+            hidden_features=hidden_features,
+            num_layers=num_layers,
+            dropout=dropout,
+        )
+        
+        return MODEL_REGISTRY[name_lower](base_model, **kwargs)
     
     return MODEL_REGISTRY[name_lower](**kwargs)
 

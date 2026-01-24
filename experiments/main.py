@@ -158,6 +158,31 @@ def run_table1(
                             num_layers=config.get('num_layers', 2),
                         )
                         model_results['acr'].append(cert['average_certified_radius'])
+                    elif model_name == 'randomized_smoothing':
+                        # Use model's built-in certification
+                        model.to(device)
+                        model.eval()
+                        _, cert_acc, avg_radius = model.certify_all_nodes(
+                            data.x.to(device), data.adj.to(device),
+                            data.test_mask.to(device), data.y.to(device),
+                        )
+                        model_results['acr'].append(avg_radius)
+                    elif model_name == 'gnncert':
+                        # Use GNNCert's certification
+                        model.to(device)
+                        model.eval()
+                        test_indices = data.test_mask.nonzero().squeeze(-1)
+                        radii = []
+                        for idx in test_indices[:100]:  # Sample for efficiency
+                            idx = idx.item()
+                            _, radius = model.certify_node(
+                                data.x.to(device), data.adj.to(device),
+                                idx, data.y[idx].item(),
+                            )
+                            if radius > 0:
+                                radii.append(radius)
+                        avg_radius = np.mean(radii) if radii else 0.0
+                        model_results['acr'].append(avg_radius)
                     else:
                         model_results['acr'].append(None)
                         
@@ -1086,9 +1111,10 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Model lists
+    # Model lists - matching PDF Table 1
     all_models = ['ghn', 'gcn', 'gat', 'sgc', 'spectral_gcn', 'groupsort_gcn', 
-                  'pairnorm_gcn', 'gnnguard', 'robustgcn']
+                  'pairnorm_gcn', 'randomized_smoothing', 'gnncert', 
+                  'gnnguard', 'robustgcn']
     attack_models = ['ghn', 'gcn', 'groupsort_gcn', 'gnnguard', 'robustgcn']
     
     exp = args.experiment

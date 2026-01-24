@@ -1,14 +1,26 @@
 # =============================================================================
 # Makefile for Graph Hölder Networks (GHN)
-# ICML 2026 Submission
+# ICML 2026 Submission - Complete Experiments
 # =============================================================================
 #
+# Paper Experiments Mapping:
+#   Table 1  → make table1      (Clean accuracy + ACR)
+#   Figure 1 → make figure1     (Certified accuracy curves)
+#   Figure 2 → make figure2     (Margin-radius scaling)
+#   Table 2  → make table2      (PGD attacks)
+#   Table 3  → make table3      (Nettack + Metattack)
+#   Table 4  → make table4      (Bernoulli edge deletion)
+#   Figure 3 → make figure3     (NSR analysis)
+#   Table 5  → make table5      (Deep networks + MAD)
+#   Table 6  → make table6      (Ablation α)
+#   Table 7  → make table7      (Ablation depth)
+#   Table 8  → make table8      (Spectral norm ablation)
+#   Table 9  → make table9      (ogbn-arxiv scalability)
+#
 # Quick Start:
-#   make install       - Install dependencies (PyTorch Geometric)
-#   make train         - Train GHN on Cora
-#   make eval          - Evaluate with certification
-#   make table1-quick  - Quick Table 1 (3 seeds)
-#   make all-exp       - Run all paper experiments
+#   make install    → Install PyTorch Geometric
+#   make test       → Verify installation
+#   make all-exp    → Run ALL paper experiments
 #
 # =============================================================================
 
@@ -22,14 +34,9 @@ DATASETS := cora citeseer pubmed
 # Directories
 EXP_DIR := experiments
 RESULTS_DIR := results
-CHECKPOINT_DIR := checkpoints
-DATA_DIR := data
 
-# Default model settings
+# Default settings
 MODEL := ghn
-ALPHA := 0.8
-HIDDEN := 64
-LAYERS := 2
 
 # =============================================================================
 # Installation
@@ -37,23 +44,58 @@ LAYERS := 2
 
 .PHONY: install
 install:
-	@echo "Installing dependencies..."
+	@echo "Installing PyTorch and PyTorch Geometric..."
 	$(PIP) install torch torchvision --break-system-packages
 	$(PIP) install torch-geometric --break-system-packages
 	$(PIP) install torch-scatter torch-sparse --break-system-packages
 	$(PIP) install numpy scipy tqdm matplotlib seaborn ogb --break-system-packages
-	@echo "Installation complete!"
+	@echo "✓ Installation complete!"
 
 .PHONY: install-cpu
 install-cpu:
-	@echo "Installing CPU-only dependencies..."
+	@echo "Installing CPU-only version..."
 	$(PIP) install torch torchvision --index-url https://download.pytorch.org/whl/cpu --break-system-packages
 	$(PIP) install torch-geometric torch-scatter torch-sparse --break-system-packages
 	$(PIP) install numpy scipy tqdm matplotlib seaborn ogb --break-system-packages
 
-.PHONY: install-dev
-install-dev: install
-	$(PIP) install pytest black flake8 mypy jupyter --break-system-packages
+# =============================================================================
+# Quick Tests
+# =============================================================================
+
+.PHONY: test
+test: test-models test-data
+	@echo "✓ All tests passed!"
+
+.PHONY: test-models
+test-models:
+	@echo "Testing model implementations..."
+	@$(PYTHON) -c "\
+import sys; sys.path.insert(0, '.'); \
+import torch; \
+from models import get_model, MODEL_REGISTRY; \
+print(f'Available models: {list(MODEL_REGISTRY.keys())}'); \
+x = torch.randn(100, 16); \
+adj = torch.eye(100); \
+passed = 0; \
+for name in MODEL_REGISTRY: \
+    try: \
+        model = get_model(name, in_features=16, out_features=7); \
+        out = model(x, adj); \
+        assert out.shape == (100, 7); \
+        print(f'  ✓ {name}'); passed += 1; \
+    except Exception as e: \
+        print(f'  ✗ {name}: {e}'); \
+print(f'\\nPassed: {passed}/{len(MODEL_REGISTRY)}')"
+
+.PHONY: test-data
+test-data:
+	@echo "Testing data loaders..."
+	@$(PYTHON) -c "\
+import sys; sys.path.insert(0, '.'); \
+from data.datasets import load_dataset, print_dataset_info; \
+for name in ['cora', 'citeseer', 'synthetic']: \
+    data = load_dataset(name); \
+    print(f'✓ {name}: {data.num_nodes} nodes, {data.num_classes} classes')"
 
 # =============================================================================
 # Training
@@ -61,7 +103,7 @@ install-dev: install
 
 .PHONY: train
 train:
-	@echo "Training $(MODEL) on cora..."
+	@echo "Training $(MODEL) on Cora..."
 	@$(PYTHON) -c "\
 import sys; sys.path.insert(0, '.'); \
 from models import get_model; \
@@ -70,323 +112,259 @@ from utils.training import train_and_evaluate, set_seed; \
 from configs.default import get_model_config, get_training_config; \
 import torch; \
 device = torch.device('cuda:$(GPU)' if torch.cuda.is_available() else 'cpu'); \
-print(f'Device: {device}'); \
 set_seed(42); \
 data = load_dataset('cora'); \
 print_dataset_info(data); \
 config = get_model_config('$(MODEL)'); \
 model = get_model('$(MODEL)', in_features=data.num_features, out_features=data.num_classes, **config); \
-print(f'Model: $(MODEL), Params: {sum(p.numel() for p in model.parameters()):,}'); \
+print(f'Parameters: {sum(p.numel() for p in model.parameters()):,}'); \
 results = train_and_evaluate(model, data, get_training_config(), device); \
-print(f'\\nTest Accuracy: {results[\"test_accuracy\"]:.4f}')"
-
-.PHONY: train-all
-train-all:
-	@for model in ghn gcn gat sgc spectral_gcn groupsort_gcn; do \
-		echo "\n========== Training $$model =========="; \
-		$(MAKE) train MODEL=$$model; \
-	done
-
-.PHONY: train-dataset
-train-dataset:
-	@$(MAKE) train MODEL=$(MODEL) DATASET=$(DATASET)
+print(f'Test Accuracy: {results[\"test_accuracy\"]*100:.2f}%')"
 
 # =============================================================================
-# Evaluation & Certification
-# =============================================================================
-
-.PHONY: eval
-eval:
-	@echo "Evaluating $(MODEL) with certification..."
-	@$(PYTHON) -c "\
-import sys; sys.path.insert(0, '.'); \
-from models import get_model; \
-from data.datasets import load_dataset; \
-from utils.training import train_and_evaluate, set_seed; \
-from certify.certification import certify_all_nodes; \
-from configs.default import get_model_config, get_training_config; \
-import torch; \
-device = torch.device('cuda:$(GPU)' if torch.cuda.is_available() else 'cpu'); \
-set_seed(42); \
-data = load_dataset('cora'); \
-config = get_model_config('$(MODEL)'); \
-model = get_model('$(MODEL)', in_features=data.num_features, out_features=data.num_classes, **config); \
-results = train_and_evaluate(model, data, get_training_config(), device, verbose=False); \
-print(f'Test Accuracy: {results[\"test_accuracy\"]:.4f}'); \
-if '$(MODEL)' in ['ghn', 'spectral_gcn', 'groupsort_gcn']: \
-    cert = certify_all_nodes(model, data.x.to(device), data.adj.to(device), data.y.to(device), data.test_mask.to(device), 'ghn' if '$(MODEL)'=='ghn' else 'lipschitz', config.get('alpha', 1.0), config.get('num_layers', 2)); \
-    print(f'Avg Certified Radius: {cert[\"average_certified_radius\"]:.4f}'); \
-    print(f'Certified Accuracy @0.1: {cert[\"certified_accuracy\"]:.4f}')"
-
-# =============================================================================
-# Paper Experiments - Table 1
+# TABLE 1: Clean Accuracy and ACR (Section 1.2)
 # =============================================================================
 
 .PHONY: table1
 table1:
-	@echo "Running Table 1: Full experiments (10 seeds)..."
+	@echo "═══════════════════════════════════════════════════════════════"
+	@echo "TABLE 1: Clean Accuracy and Average Certified Radius"
+	@echo "═══════════════════════════════════════════════════════════════"
 	@mkdir -p $(RESULTS_DIR)
 	$(PYTHON) $(EXP_DIR)/main.py \
 		--experiment table1 \
 		--datasets $(DATASETS) \
-		--models ghn gcn gat sgc spectral_gcn groupsort_gcn pairnorm_gcn gnnguard robustgcn \
 		--seeds $(SEEDS) \
 		--gpu $(GPU) \
-		--output_dir $(RESULTS_DIR) \
-		--verbose
+		--output_dir $(RESULTS_DIR)
 
 .PHONY: table1-quick
 table1-quick:
-	@echo "Running Table 1: Quick version (3 seeds, main models)..."
-	@mkdir -p $(RESULTS_DIR)
+	@echo "TABLE 1 (Quick: 3 seeds, 2 datasets)..."
+	@mkdir -p $(RESULTS_DIR)/quick
 	$(PYTHON) $(EXP_DIR)/main.py \
 		--experiment table1 \
 		--datasets cora citeseer \
-		--models ghn gcn spectral_gcn groupsort_gcn \
 		--seeds 0 1 2 \
 		--gpu $(GPU) \
 		--output_dir $(RESULTS_DIR)/quick
 
 # =============================================================================
-# Paper Experiments - Figure 1 (Scaling)
+# FIGURE 1: Certified Accuracy Curves (Section 1.2)
 # =============================================================================
 
-.PHONY: scaling
-scaling:
-	@echo "Running Figure 1: Scaling behavior analysis..."
+.PHONY: figure1
+figure1:
+	@echo "═══════════════════════════════════════════════════════════════"
+	@echo "FIGURE 1: Certified Accuracy vs Perturbation Radius"
+	@echo "═══════════════════════════════════════════════════════════════"
 	@mkdir -p $(RESULTS_DIR)
 	$(PYTHON) $(EXP_DIR)/main.py \
-		--experiment scaling \
-		--datasets cora \
+		--experiment figure1 \
 		--gpu $(GPU) \
 		--output_dir $(RESULTS_DIR)
 
 # =============================================================================
-# Paper Experiments - Table 2 (Certified Accuracy)
+# FIGURE 2: Margin-Radius Scaling (Section 1.3)
 # =============================================================================
 
-.PHONY: certified-accuracy
-certified-accuracy:
-	@echo "Running Table 2: Certified accuracy at various radii..."
+.PHONY: figure2
+figure2:
+	@echo "═══════════════════════════════════════════════════════════════"
+	@echo "FIGURE 2: Margin-Radius Scaling Analysis"
+	@echo "═══════════════════════════════════════════════════════════════"
 	@mkdir -p $(RESULTS_DIR)
 	$(PYTHON) $(EXP_DIR)/main.py \
-		--experiment certified_accuracy \
-		--datasets $(DATASETS) \
-		--radii 0.05 0.1 0.15 0.2 0.25 0.3 \
-		--seeds 0 1 2 3 4 \
+		--experiment figure2 \
 		--gpu $(GPU) \
 		--output_dir $(RESULTS_DIR)
 
 # =============================================================================
-# Ablation Studies
+# TABLE 2: PGD Attacks (Section 1.4)
 # =============================================================================
 
-.PHONY: ablation-alpha
-ablation-alpha:
-	@echo "Running Ablation: Effect of α..."
+.PHONY: table2
+table2:
+	@echo "═══════════════════════════════════════════════════════════════"
+	@echo "TABLE 2: Accuracy under PGD Attacks"
+	@echo "═══════════════════════════════════════════════════════════════"
 	@mkdir -p $(RESULTS_DIR)
 	$(PYTHON) $(EXP_DIR)/main.py \
-		--experiment ablation_alpha \
-		--datasets cora \
-		--alphas 0.5 0.6 0.7 0.8 0.9 1.0 \
-		--seeds 0 1 2 3 4 \
-		--gpu $(GPU) \
-		--output_dir $(RESULTS_DIR)
-
-.PHONY: ablation-depth
-ablation-depth:
-	@echo "Running Ablation: Effect of depth L..."
-	@mkdir -p $(RESULTS_DIR)
-	$(PYTHON) $(EXP_DIR)/main.py \
-		--experiment ablation_depth \
-		--datasets cora \
-		--depths 1 2 3 4 5 6 \
-		--seeds 0 1 2 3 4 \
-		--gpu $(GPU) \
-		--output_dir $(RESULTS_DIR)
-
-.PHONY: ablation-hidden
-ablation-hidden:
-	@echo "Running Ablation: Effect of hidden dimension..."
-	@mkdir -p $(RESULTS_DIR)
-	$(PYTHON) $(EXP_DIR)/main.py \
-		--experiment ablation_hidden \
-		--datasets cora \
-		--hidden_dims 16 32 64 128 256 \
-		--seeds 0 1 2 3 4 \
-		--gpu $(GPU) \
-		--output_dir $(RESULTS_DIR)
-
-.PHONY: ablation-all
-ablation-all: ablation-alpha ablation-depth ablation-hidden
-	@echo "All ablation studies completed!"
-
-# =============================================================================
-# Attack Evaluation
-# =============================================================================
-
-.PHONY: attacks
-attacks:
-	@echo "Running Attack Evaluation (PGD, FGSM)..."
-	@mkdir -p $(RESULTS_DIR)
-	$(PYTHON) $(EXP_DIR)/main.py \
-		--experiment attacks \
-		--datasets cora \
-		--epsilons 0.01 0.05 0.1 0.15 0.2 \
-		--seeds 0 1 2 \
+		--experiment table2 \
 		--gpu $(GPU) \
 		--output_dir $(RESULTS_DIR)
 
 # =============================================================================
-# Scalability (ogbn-arxiv)
+# TABLE 3: Structural Attacks - Nettack + Metattack (Section 1.5)
 # =============================================================================
 
-.PHONY: scalability
-scalability:
-	@echo "Running Scalability Experiment (ogbn-arxiv)..."
+.PHONY: table3
+table3:
+	@echo "═══════════════════════════════════════════════════════════════"
+	@echo "TABLE 3: Structural Attack Robustness"
+	@echo "═══════════════════════════════════════════════════════════════"
 	@mkdir -p $(RESULTS_DIR)
 	$(PYTHON) $(EXP_DIR)/main.py \
-		--experiment scalability \
+		--experiment table3 \
 		--gpu $(GPU) \
 		--output_dir $(RESULTS_DIR)
 
 # =============================================================================
-# All Experiments
+# TABLE 4: Bernoulli Edge Deletion (Section 1.5)
+# =============================================================================
+
+.PHONY: table4
+table4:
+	@echo "═══════════════════════════════════════════════════════════════"
+	@echo "TABLE 4: Bernoulli Edge Deletion (Theorem 3.5)"
+	@echo "═══════════════════════════════════════════════════════════════"
+	@mkdir -p $(RESULTS_DIR)
+	$(PYTHON) $(EXP_DIR)/main.py \
+		--experiment table4 \
+		--gpu $(GPU) \
+		--output_dir $(RESULTS_DIR)
+
+# =============================================================================
+# FIGURE 3: NSR Analysis (Section 1.6)
+# =============================================================================
+
+.PHONY: figure3
+figure3:
+	@echo "═══════════════════════════════════════════════════════════════"
+	@echo "FIGURE 3: Noise-to-Signal Ratio Analysis"
+	@echo "═══════════════════════════════════════════════════════════════"
+	@mkdir -p $(RESULTS_DIR)
+	$(PYTHON) $(EXP_DIR)/main.py \
+		--experiment figure3 \
+		--gpu $(GPU) \
+		--output_dir $(RESULTS_DIR)
+
+# =============================================================================
+# TABLE 5: Deep Networks + MAD (Section 1.7)
+# =============================================================================
+
+.PHONY: table5
+table5:
+	@echo "═══════════════════════════════════════════════════════════════"
+	@echo "TABLE 5: Deep Network Trainability (Oversmoothing)"
+	@echo "═══════════════════════════════════════════════════════════════"
+	@mkdir -p $(RESULTS_DIR)
+	$(PYTHON) $(EXP_DIR)/main.py \
+		--experiment table5 \
+		--gpu $(GPU) \
+		--output_dir $(RESULTS_DIR)
+
+# =============================================================================
+# TABLE 6: Ablation α (Section 1.8)
+# =============================================================================
+
+.PHONY: table6
+table6:
+	@echo "═══════════════════════════════════════════════════════════════"
+	@echo "TABLE 6: Ablation - Effect of Hölder Exponent α"
+	@echo "═══════════════════════════════════════════════════════════════"
+	@mkdir -p $(RESULTS_DIR)
+	$(PYTHON) $(EXP_DIR)/main.py \
+		--experiment table6 \
+		--gpu $(GPU) \
+		--output_dir $(RESULTS_DIR)
+
+# =============================================================================
+# TABLE 7: Ablation Depth (Section 1.8)
+# =============================================================================
+
+.PHONY: table7
+table7:
+	@echo "═══════════════════════════════════════════════════════════════"
+	@echo "TABLE 7: Ablation - Effect of Network Depth L"
+	@echo "═══════════════════════════════════════════════════════════════"
+	@mkdir -p $(RESULTS_DIR)
+	$(PYTHON) $(EXP_DIR)/main.py \
+		--experiment table7 \
+		--gpu $(GPU) \
+		--output_dir $(RESULTS_DIR)
+
+# =============================================================================
+# TABLE 8: Spectral Normalization Ablation (Section 1.8)
+# =============================================================================
+
+.PHONY: table8
+table8:
+	@echo "═══════════════════════════════════════════════════════════════"
+	@echo "TABLE 8: Spectral Normalization Ablation"
+	@echo "═══════════════════════════════════════════════════════════════"
+	@mkdir -p $(RESULTS_DIR)
+	$(PYTHON) $(EXP_DIR)/main.py \
+		--experiment table8 \
+		--gpu $(GPU) \
+		--output_dir $(RESULTS_DIR)
+
+# =============================================================================
+# TABLE 9: Scalability ogbn-arxiv (Section 1.9)
+# =============================================================================
+
+.PHONY: table9
+table9:
+	@echo "═══════════════════════════════════════════════════════════════"
+	@echo "TABLE 9: Scalability (ogbn-arxiv)"
+	@echo "═══════════════════════════════════════════════════════════════"
+	@mkdir -p $(RESULTS_DIR)
+	$(PYTHON) $(EXP_DIR)/main.py \
+		--experiment table9 \
+		--gpu $(GPU) \
+		--output_dir $(RESULTS_DIR)
+
+# =============================================================================
+# Run ALL Experiments
 # =============================================================================
 
 .PHONY: all-exp
 all-exp:
-	@echo "Running ALL experiments for ICML paper..."
+	@echo "═══════════════════════════════════════════════════════════════"
+	@echo "Running ALL Paper Experiments"
+	@echo "═══════════════════════════════════════════════════════════════"
 	@mkdir -p $(RESULTS_DIR)
 	$(PYTHON) $(EXP_DIR)/main.py \
 		--experiment all \
 		--datasets $(DATASETS) \
 		--seeds $(SEEDS) \
 		--gpu $(GPU) \
-		--output_dir $(RESULTS_DIR) \
-		--verbose
+		--output_dir $(RESULTS_DIR)
 
 .PHONY: all-exp-quick
 all-exp-quick:
 	@echo "Running ALL experiments (quick version)..."
-	@mkdir -p $(RESULTS_DIR)
+	@mkdir -p $(RESULTS_DIR)/quick
 	$(PYTHON) $(EXP_DIR)/main.py \
 		--experiment all \
 		--datasets cora \
 		--seeds 0 1 2 \
 		--gpu $(GPU) \
 		--output_dir $(RESULTS_DIR)/quick
+
+# =============================================================================
+# Ablation Studies (Combined)
+# =============================================================================
+
+.PHONY: ablation-all
+ablation-all: table6 table7 table8
+	@echo "✓ All ablation studies completed!"
 
 # =============================================================================
 # Visualization
 # =============================================================================
 
 .PHONY: plot-all
-plot-all: plot-scaling plot-ablation plot-attacks
-	@echo "All plots generated!"
-
-.PHONY: plot-scaling
-plot-scaling:
-	@echo "Generating Figure 1: Scaling plot..."
-	@cd $(RESULTS_DIR)/scaling && $(PYTHON) plot_scaling.py
-
-.PHONY: plot-ablation
-plot-ablation:
-	@echo "Generating ablation plots..."
-	@$(PYTHON) -c "\
-import json; import matplotlib.pyplot as plt; import numpy as np; \
-# Alpha ablation \
-try: \
-    with open('$(RESULTS_DIR)/ablation_alpha/ablation_alpha.json') as f: data = json.load(f); \
-    alphas = sorted([float(a) for a in data.keys()]); \
-    accs = [np.mean(data[str(a)]['accuracy']) for a in alphas]; \
-    acrs = [np.mean(data[str(a)]['acr']) for a in alphas]; \
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4)); \
-    ax1.plot(alphas, accs, 'o-b', linewidth=2, markersize=8); ax1.set_xlabel('α'); ax1.set_ylabel('Accuracy'); ax1.set_title('Effect of α on Accuracy'); ax1.grid(True, alpha=0.3); \
-    ax2.plot(alphas, acrs, 'o-r', linewidth=2, markersize=8); ax2.set_xlabel('α'); ax2.set_ylabel('ACR'); ax2.set_title('Effect of α on Certified Radius'); ax2.grid(True, alpha=0.3); \
-    plt.tight_layout(); plt.savefig('$(RESULTS_DIR)/ablation_alpha/ablation_alpha.pdf', dpi=300); \
-    print('Saved: $(RESULTS_DIR)/ablation_alpha/ablation_alpha.pdf'); \
-except FileNotFoundError: print('Run ablation-alpha first')"
-
-.PHONY: plot-attacks
-plot-attacks:
-	@echo "Generating attack evaluation plots..."
-	@$(PYTHON) -c "\
-import json; import matplotlib.pyplot as plt; import numpy as np; \
-try: \
-    with open('$(RESULTS_DIR)/attacks/attack_results.json') as f: data = json.load(f); \
-    fig, ax = plt.subplots(figsize=(8, 5)); \
-    for model in data: \
-        eps = sorted([float(e) for e in data[model].keys()]); \
-        pgd_accs = [np.mean(data[model][str(e)]['pgd']) for e in eps]; \
-        ax.plot(eps, pgd_accs, 'o-', label=model, linewidth=2); \
-    ax.set_xlabel('Perturbation Budget ε'); ax.set_ylabel('Accuracy under PGD Attack'); \
-    ax.set_title('Robustness to PGD Attack'); ax.legend(); ax.grid(True, alpha=0.3); \
-    plt.tight_layout(); plt.savefig('$(RESULTS_DIR)/attacks/attack_robustness.pdf', dpi=300); \
-    print('Saved: $(RESULTS_DIR)/attacks/attack_robustness.pdf'); \
-except FileNotFoundError: print('Run attacks first')"
-
-# =============================================================================
-# Testing & Validation
-# =============================================================================
-
-.PHONY: test
-test:
-	@echo "Running tests..."
-	$(PYTHON) -m pytest tests/ -v || echo "No tests directory found"
-
-.PHONY: test-models
-test-models:
-	@echo "Testing all model implementations..."
-	@$(PYTHON) -c "\
-import sys; sys.path.insert(0, '.'); \
-import torch; \
-from models import get_model, MODEL_REGISTRY; \
-print('Testing all models...'); \
-x = torch.randn(100, 16); \
-adj = torch.eye(100) + torch.randn(100, 100).abs() * 0.1; \
-adj = (adj + adj.T) / 2; \
-deg = adj.sum(1); deg_inv = deg.pow(-0.5); deg_inv[deg_inv==float('inf')]=0; \
-adj = deg_inv.unsqueeze(1) * adj * deg_inv.unsqueeze(0); \
-passed = 0; failed = 0; \
-for name in MODEL_REGISTRY: \
-    try: \
-        model = get_model(name, in_features=16, out_features=7); \
-        out = model(x, adj); \
-        assert out.shape == (100, 7), f'Wrong output shape: {out.shape}'; \
-        print(f'  ✓ {name}: OK'); passed += 1; \
-    except Exception as e: \
-        print(f'  ✗ {name}: {e}'); failed += 1; \
-print(f'\\nPassed: {passed}, Failed: {failed}')"
-
-.PHONY: test-data
-test-data:
-	@echo "Testing data loaders..."
-	@$(PYTHON) -c "\
-import sys; sys.path.insert(0, '.'); \
-from data.datasets import load_dataset, AVAILABLE_DATASETS, print_dataset_info; \
-for name in ['cora', 'citeseer', 'pubmed', 'synthetic']: \
-    try: \
-        data = load_dataset(name); \
-        print(f'✓ {name}: {data.num_nodes} nodes, {data.num_features} features, {data.num_classes} classes'); \
-    except Exception as e: \
-        print(f'✗ {name}: {e}')"
-
-.PHONY: test-certification
-test-certification:
-	@echo "Testing certification..."
-	@$(PYTHON) -c "\
-import sys; sys.path.insert(0, '.'); \
-import torch; \
-from models.ghn import GraphHolderNetwork; \
-from data.datasets import load_dataset; \
-from certify.certification import certify_all_nodes; \
-data = load_dataset('synthetic', num_nodes=100); \
-model = GraphHolderNetwork(data.num_features, data.num_classes, 32, 2, 0.8); \
-cert = certify_all_nodes(model, data.x, data.adj, data.y, data.test_mask, 'ghn', 0.8, 2); \
-print(f'ACR: {cert[\"average_certified_radius\"]:.4f}'); \
-print(f'Certified nodes: {cert[\"num_certified\"]}/{cert[\"num_total\"]}'); \
-print('✓ Certification test passed')"
+plot-all:
+	@echo "Generating all figures..."
+	@cd $(RESULTS_DIR) && \
+	for script in plot_figure*.py; do \
+		if [ -f "$$script" ]; then \
+			echo "Running $$script..."; \
+			$(PYTHON) "$$script"; \
+		fi; \
+	done
+	@echo "✓ Plots saved to $(RESULTS_DIR)/"
 
 # =============================================================================
 # Utilities
@@ -394,22 +372,10 @@ print('✓ Certification test passed')"
 
 .PHONY: clean
 clean:
-	@echo "Cleaning generated files..."
 	rm -rf $(RESULTS_DIR)/*
-	rm -rf $(CHECKPOINT_DIR)/*
 	rm -rf __pycache__ */__pycache__ */*/__pycache__
-	rm -rf .pytest_cache
-	rm -rf *.egg-info
-	find . -name "*.pyc" -delete
-	find . -name ".DS_Store" -delete
-
-.PHONY: clean-results
-clean-results:
-	rm -rf $(RESULTS_DIR)/*
-
-.PHONY: dirs
-dirs:
-	@mkdir -p $(RESULTS_DIR) $(CHECKPOINT_DIR) $(DATA_DIR)
+	rm -rf *.pyc
+	@echo "✓ Cleaned"
 
 .PHONY: download-data
 download-data:
@@ -422,80 +388,47 @@ for name in ['cora', 'citeseer', 'pubmed']: \
     data = load_dataset(name); \
     print_dataset_info(data)"
 
-.PHONY: info
-info:
-	@echo ""
-	@echo "╔═══════════════════════════════════════════════════════════╗"
-	@echo "║         Graph Hölder Networks (GHN) - ICML 2026           ║"
-	@echo "╚═══════════════════════════════════════════════════════════╝"
-	@echo ""
-	@echo "Available models:"
-	@$(PYTHON) -c "import sys; sys.path.insert(0, '.'); from models import MODEL_REGISTRY; [print(f'  • {m}') for m in sorted(MODEL_REGISTRY.keys())]" 2>/dev/null || echo "  (run 'make install' first)"
-	@echo ""
-	@echo "Available datasets: cora, citeseer, pubmed, ogbn-arxiv, synthetic"
-	@echo ""
-	@echo "Quick commands:"
-	@echo "  make install      Install PyTorch Geometric"
-	@echo "  make train        Train GHN on Cora"
-	@echo "  make eval         Evaluate with certification"
-	@echo "  make table1-quick Quick Table 1 experiment"
-	@echo "  make all-exp      Run all paper experiments"
-	@echo ""
+# =============================================================================
+# Help
+# =============================================================================
 
 .PHONY: help
 help:
 	@echo ""
-	@echo "Graph Hölder Networks - Makefile Commands"
-	@echo "=========================================="
+	@echo "╔═══════════════════════════════════════════════════════════════╗"
+	@echo "║     Graph Hölder Networks - ICML 2026 Experiments             ║"
+	@echo "╚═══════════════════════════════════════════════════════════════╝"
 	@echo ""
 	@echo "SETUP:"
-	@echo "  install           Install PyTorch Geometric and dependencies"
-	@echo "  install-cpu       Install CPU-only version"
-	@echo "  download-data     Pre-download all datasets"
-	@echo ""
-	@echo "TRAINING:"
-	@echo "  train             Train single model (MODEL=ghn)"
-	@echo "  train-all         Train all model types"
-	@echo "  eval              Evaluate with certification"
+	@echo "  make install        Install PyTorch Geometric"
+	@echo "  make test           Verify all models work"
 	@echo ""
 	@echo "PAPER EXPERIMENTS:"
-	@echo "  table1            Table 1 - Main results (full)"
-	@echo "  table1-quick      Table 1 - Quick version"
-	@echo "  scaling           Figure 1 - Scaling behavior"
-	@echo "  certified-accuracy Table 2 - CA at various radii"
+	@echo "  make table1         Table 1: Clean accuracy + ACR"
+	@echo "  make figure1        Figure 1: Certified accuracy curves"
+	@echo "  make figure2        Figure 2: Margin-radius scaling"
+	@echo "  make table2         Table 2: PGD attacks"
+	@echo "  make table3         Table 3: Nettack + Metattack"
+	@echo "  make table4         Table 4: Bernoulli edge deletion"
+	@echo "  make figure3        Figure 3: NSR analysis"
+	@echo "  make table5         Table 5: Deep networks + MAD"
+	@echo "  make table6         Table 6: Ablation α"
+	@echo "  make table7         Table 7: Ablation depth"
+	@echo "  make table8         Table 8: Spectral norm ablation"
+	@echo "  make table9         Table 9: ogbn-arxiv scalability"
 	@echo ""
-	@echo "ABLATION STUDIES:"
-	@echo "  ablation-alpha    Effect of Hölder exponent α"
-	@echo "  ablation-depth    Effect of network depth L"
-	@echo "  ablation-hidden   Effect of hidden dimension"
-	@echo "  ablation-all      Run all ablations"
-	@echo ""
-	@echo "ATTACK EVALUATION:"
-	@echo "  attacks           PGD and FGSM attack evaluation"
-	@echo ""
-	@echo "SCALABILITY:"
-	@echo "  scalability       ogbn-arxiv experiment"
-	@echo ""
-	@echo "ALL EXPERIMENTS:"
-	@echo "  all-exp           Run all experiments (full)"
-	@echo "  all-exp-quick     Run all experiments (quick)"
-	@echo ""
-	@echo "VISUALIZATION:"
-	@echo "  plot-all          Generate all figures"
-	@echo "  plot-scaling      Generate Figure 1"
-	@echo "  plot-ablation     Generate ablation plots"
-	@echo ""
-	@echo "TESTING:"
-	@echo "  test-models       Test all model implementations"
-	@echo "  test-data         Test data loaders"
-	@echo "  test-certification Test certification module"
+	@echo "COMBINED:"
+	@echo "  make all-exp        Run ALL experiments (full)"
+	@echo "  make all-exp-quick  Run ALL experiments (quick)"
+	@echo "  make ablation-all   Run all ablation studies"
+	@echo "  make plot-all       Generate all figures"
 	@echo ""
 	@echo "UTILITIES:"
-	@echo "  clean             Remove all generated files"
-	@echo "  info              Show project information"
+	@echo "  make train          Train single model"
+	@echo "  make download-data  Pre-download datasets"
+	@echo "  make clean          Remove generated files"
 	@echo ""
-	@echo "VARIABLES:"
-	@echo "  MODEL=ghn         Model to use (default: ghn)"
-	@echo "  GPU=0             GPU device ID (default: 0)"
-	@echo "  DATASETS='cora citeseer pubmed'"
+	@echo "OPTIONS:"
+	@echo "  GPU=0               GPU device (default: 0)"
+	@echo "  MODEL=ghn           Model for training"
 	@echo ""

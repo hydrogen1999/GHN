@@ -167,6 +167,8 @@ def get_model_config(model_name: str) -> dict:
         'pairnorm_gcn': PAIRNORM_GCN_CONFIG,
         'gnnguard': GNNGUARD_CONFIG,
         'robustgcn': ROBUSTGCN_CONFIG,
+        'randomized_smoothing': {**GCN_CONFIG, **RANDOMIZED_SMOOTHING_CONFIG},
+        'gnncert': {**GCN_CONFIG, **GNNCERT_CONFIG},
     }
     
     model_name = model_name.lower()
@@ -183,3 +185,23 @@ def get_dataset_config(dataset_name: str) -> dict:
         raise ValueError(f"Unknown dataset: {dataset_name}")
     
     return DATASET_CONFIGS[dataset_name].copy()
+
+
+def get_training_config() -> dict:
+    """Get training configuration."""
+    return TRAINING_CONFIG.copy()
+
+
+def get_experiment_config() -> dict:
+    """Get experiment configuration."""
+    return EXPERIMENT_CONFIG.copy()
+
+
+# List of all model names
+MODELS = [
+    'ghn',
+    'gcn', 'gat', 'sgc',
+    'spectral_gcn', 'groupsort_gcn', 'pairnorm_gcn',
+    'randomized_smoothing', 'gnncert',
+    'gnnguard', 'robustgcn',
+]
