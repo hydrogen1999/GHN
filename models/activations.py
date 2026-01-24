@@ -57,14 +57,17 @@ class AlphaRePU(nn.Module):
             # Gradient at x=0 from right side: α * (0 + c)^(α-1) = α * c^(α-1)
             grad_at_zero = self.alpha * (self.c ** (self.alpha - 1))
             
-            positive_part = torch.pow(x + self.c, self.alpha)
-            # Linear extension for negative part: c^α + grad_at_zero * x
+            base = F.relu(x + self.c) 
+            positive_part = torch.pow(base, self.alpha)
+            
+            # Linear extension for negative part
             negative_part = self._c_alpha + grad_at_zero * x
             
             return torch.where(x >= 0, positive_part, negative_part)
         else:
             # Original strict definition (may cause dying neurons)
-            positive_part = torch.pow(x + self.c, self.alpha)
+            base = F.relu(x + self.c)
+            positive_part = torch.pow(base, self.alpha)
             return torch.where(x >= 0, positive_part, self._c_alpha * torch.ones_like(x))
     
     def holder_seminorm(self) -> float:
