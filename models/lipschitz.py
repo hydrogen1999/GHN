@@ -40,6 +40,8 @@ class SpectralNorm(nn.Module):
         weight = getattr(module, name)
         h, w = weight.shape
         
+        # u is left singular vector (size = num rows = h)
+        # v is right singular vector (size = num cols = w)
         self.register_buffer('u', F.normalize(torch.randn(h), dim=0))
         self.register_buffer('v', F.normalize(torch.randn(w), dim=0))
     
@@ -49,7 +51,9 @@ class SpectralNorm(nn.Module):
         
         with torch.no_grad():
             for _ in range(self.n_power_iterations):
+                # v = W^T u / ||W^T u||
                 v = F.normalize(torch.mv(weight.t(), u), dim=0, eps=self.eps)
+                # u = W v / ||W v||
                 u = F.normalize(torch.mv(weight, v), dim=0, eps=self.eps)
         
         return u, v
@@ -82,6 +86,11 @@ class SpectralGCNLayer(nn.Module):
     """
     GCN layer with spectral normalization.
     Enforces ||W||_2 <= 1 for Lipschitz continuity.
+    
+    Weight shape: (in_features, out_features)
+    For power iteration on W:
+    - u ∈ R^{in_features} (left singular vector)
+    - v ∈ R^{out_features} (right singular vector)
     """
     
     def __init__(
@@ -103,8 +112,11 @@ class SpectralGCNLayer(nn.Module):
             self.register_parameter('bias', None)
         
         # Power iteration vectors
-        self.register_buffer('u', F.normalize(torch.randn(out_features), dim=0))
-        self.register_buffer('v', F.normalize(torch.randn(in_features), dim=0))
+        # For W of shape (in_features, out_features):
+        # u has size in_features (left singular vector)
+        # v has size out_features (right singular vector)
+        self.register_buffer('u', F.normalize(torch.randn(in_features), dim=0))
+        self.register_buffer('v', F.normalize(torch.randn(out_features), dim=0))
         
         self.reset_parameters()
     
@@ -118,9 +130,13 @@ class SpectralGCNLayer(nn.Module):
         u, v = self.u, self.v
         
         # Power iteration
+        # weight shape: (in_features, out_features)
+        # weight.t() shape: (out_features, in_features)
         with torch.no_grad():
             for _ in range(1):
+                # v = W^T u / ||W^T u||, where W^T is (out, in) and u is (in,) -> v is (out,)
                 v_new = F.normalize(torch.mv(weight.t(), u), dim=0)
+                # u = W v / ||W v||, where W is (in, out) and v is (out,) -> u is (in,)
                 u_new = F.normalize(torch.mv(weight, v_new), dim=0)
             
             if self.training:
@@ -233,6 +249,11 @@ class SpectralGCN(nn.Module):
 class GroupSortGCNLayer(nn.Module):
     """
     GCN layer with GroupSort activation for strict 1-Lipschitz.
+    
+    Weight shape: (in_features, out_features)
+    For power iteration:
+    - u ∈ R^{in_features}
+    - v ∈ R^{out_features}
     """
     
     def __init__(
@@ -255,8 +276,11 @@ class GroupSortGCNLayer(nn.Module):
             self.register_parameter('bias', None)
         
         # Spectral normalization vectors
-        self.register_buffer('u', F.normalize(torch.randn(self.out_features), dim=0))
-        self.register_buffer('v', F.normalize(torch.randn(in_features), dim=0))
+        # For W of shape (in_features, out_features):
+        # u has size in_features
+        # v has size out_features
+        self.register_buffer('u', F.normalize(torch.randn(in_features), dim=0))
+        self.register_buffer('v', F.normalize(torch.randn(self.out_features), dim=0))
         
         self.activation = GroupSort(group_size)
         self.true_out_features = out_features
@@ -271,9 +295,12 @@ class GroupSortGCNLayer(nn.Module):
     def _spectral_normalize(self, weight: Tensor) -> Tensor:
         u, v = self.u, self.v
         
+        # weight shape: (in_features, out_features)
         with torch.no_grad():
             for _ in range(1):
+                # v = W^T u / ||W^T u||
                 v_new = F.normalize(torch.mv(weight.t(), u), dim=0)
+                # u = W v / ||W v||
                 u_new = F.normalize(torch.mv(weight, v_new), dim=0)
             
             if self.training:

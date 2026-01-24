@@ -98,6 +98,45 @@ def compute_lipschitz_certified_radius(
     return margin / (2 * lipschitz_constant)
 
 
+def _power_iteration_spectral_norm(weight: Tensor, num_iters: int = 10) -> float:
+    """
+    Compute spectral norm of a weight matrix using power iteration.
+    
+    For matrix W of shape (m, n):
+    - u ∈ R^m (left singular vector)
+    - v ∈ R^n (right singular vector)
+    - Power iteration: v = W^T u / ||W^T u||, u = W v / ||W v||
+    - σ = u^T W v
+    
+    Args:
+        weight: Weight matrix of shape (m, n)
+        num_iters: Number of power iterations
+        
+    Returns:
+        Estimated spectral norm
+    """
+    m, n = weight.shape
+    device = weight.device
+    
+    # Initialize u (left singular vector, size m)
+    u = torch.randn(m, device=device)
+    u = F.normalize(u, dim=0)
+    
+    with torch.no_grad():
+        for _ in range(num_iters):
+            # v = W^T u / ||W^T u||  (v has size n)
+            v = torch.mv(weight.t(), u)
+            v = F.normalize(v, dim=0)
+            # u = W v / ||W v||  (u has size m)
+            u = torch.mv(weight, v)
+            u = F.normalize(u, dim=0)
+        
+        # σ = u^T W v
+        sigma = torch.dot(u, torch.mv(weight, v))
+    
+    return abs(sigma.item())
+
+
 def compute_network_holder_constant(
     model,
     alpha: float,
@@ -121,21 +160,14 @@ def compute_network_holder_constant(
         elif hasattr(layer, 'weight'):
             # Fallback: estimate spectral norm via power iteration
             weight = layer.weight.data
-            u = torch.randn(weight.size(0), device=weight.device)
-            for _ in range(10):
-                v = F.normalize(torch.mv(weight.t(), u), dim=0)
-                u = F.normalize(torch.mv(weight, v), dim=0)
-            spectral_norm = torch.dot(u, torch.mv(weight, v)).item()
+            spectral_norm = _power_iteration_spectral_norm(weight)
             c_net *= spectral_norm ** alpha
     
     # Include readout layer if exists
     if hasattr(model, 'readout'):
         weight = model.readout.weight.data
-        u = torch.randn(weight.size(1), device=weight.device)
-        for _ in range(10):
-            v = F.normalize(torch.mv(weight.t(), u), dim=0)
-            u = F.normalize(torch.mv(weight, v), dim=0)
-        readout_norm = torch.dot(u, torch.mv(weight, v)).item()
+        # nn.Linear stores weight as (out_features, in_features)
+        readout_norm = _power_iteration_spectral_norm(weight)
         c_net *= readout_norm
     
     return c_net
@@ -156,12 +188,7 @@ def compute_network_lipschitz_constant(model) -> float:
     for name, param in model.named_parameters():
         if 'weight' in name and param.dim() == 2:
             weight = param.data
-            # Power iteration
-            u = torch.randn(weight.size(0), device=weight.device)
-            for _ in range(10):
-                v = F.normalize(torch.mv(weight.t(), u), dim=0)
-                u = F.normalize(torch.mv(weight, v), dim=0)
-            spectral_norm = torch.dot(u, torch.mv(weight, v)).item()
+            spectral_norm = _power_iteration_spectral_norm(weight)
             k *= spectral_norm
     
     return k
