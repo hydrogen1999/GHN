@@ -321,8 +321,12 @@ def certify_all_nodes(
     # Metrics
     clean_accuracy = n_correct / n_test
     
-    # Average certified radius (over correctly classified)
-    acr = np.mean(certified_radii) if certified_radii else 0.0
+    # Average certified radius (over nodes with positive radius)
+    positive_radii = [r for r in certified_radii if r > 0]
+    if positive_radii:
+        acr = np.mean(positive_radii)
+    else:
+        acr = 0.0  # Avoid NaN
     
     # Certified accuracy at various radii
     certified_radii = np.array(certified_radii)

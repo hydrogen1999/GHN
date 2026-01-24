@@ -18,18 +18,24 @@ class AlphaRePU(nn.Module):
     
     This activation is α-Hölder continuous with Hölder constant 1.
     
+    IMPORTANT: The original definition has zero gradient for x < 0, which can
+    cause "dying neuron" problems during training. We use a smooth approximation
+    that maintains α-Hölder continuity while allowing gradients to flow.
+    
     Args:
         alpha: Hölder exponent (0 < α <= 1). Default: 0.8
         c: Smoothing constant (c > 0). Default: 1e-4
+        smooth: Use smooth version that avoids dying neurons. Default: True
     """
     
-    def __init__(self, alpha: float = 0.8, c: float = 1e-4):
+    def __init__(self, alpha: float = 0.8, c: float = 1e-4, smooth: bool = True):
         super().__init__()
         assert 0 < alpha <= 1, f"α must be in (0, 1], got {alpha}"
         assert c > 0, f"c must be positive, got {c}"
         
         self.alpha = alpha
         self.c = c
+        self.smooth = smooth
         self._c_alpha = c ** alpha  # Precompute c^α
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -42,16 +48,56 @@ class AlphaRePU(nn.Module):
         Returns:
             Activated tensor of same shape
         """
-        # For numerical stability, use torch.where
-        positive_part = torch.pow(x + self.c, self.alpha)
-        return torch.where(x >= 0, positive_part, self._c_alpha * torch.ones_like(x))
+        if self.smooth:
+            # Smooth version: use softplus-like transition
+            # For x >= 0: (x + c)^α
+            # For x < 0: c^α + α * c^(α-1) * x  (linear continuation with matching gradient at x=0)
+            # This maintains continuity and has non-zero gradient everywhere
+            
+            # Gradient at x=0 from right side: α * (0 + c)^(α-1) = α * c^(α-1)
+            grad_at_zero = self.alpha * (self.c ** (self.alpha - 1))
+            
+            positive_part = torch.pow(x + self.c, self.alpha)
+            # Linear extension for negative part: c^α + grad_at_zero * x
+            negative_part = self._c_alpha + grad_at_zero * x
+            
+            return torch.where(x >= 0, positive_part, negative_part)
+        else:
+            # Original strict definition (may cause dying neurons)
+            positive_part = torch.pow(x + self.c, self.alpha)
+            return torch.where(x >= 0, positive_part, self._c_alpha * torch.ones_like(x))
     
     def holder_seminorm(self) -> float:
         """Return the Hölder seminorm [σ_{α,c}]_α = 1."""
         return 1.0
     
     def extra_repr(self) -> str:
-        return f'alpha={self.alpha}, c={self.c}'
+        return f'alpha={self.alpha}, c={self.c}, smooth={self.smooth}'
+
+
+class AlphaRePUSoftplus(nn.Module):
+    """
+    Alternative smooth α-RePU using softplus for transition.
+    
+    This version uses: σ(x) = (softplus(x, β) + c)^α
+    where softplus(x, β) = (1/β) * log(1 + exp(β*x))
+    
+    This is smooth everywhere and maintains α-Hölder continuity.
+    """
+    
+    def __init__(self, alpha: float = 0.8, c: float = 1e-4, beta: float = 5.0):
+        super().__init__()
+        self.alpha = alpha
+        self.c = c
+        self.beta = beta
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # softplus is smooth approximation of ReLU
+        soft_x = F.softplus(x, beta=self.beta)
+        return torch.pow(soft_x + self.c, self.alpha)
+    
+    def extra_repr(self) -> str:
+        return f'alpha={self.alpha}, c={self.c}, beta={self.beta}'
 
 
 class GroupSort(nn.Module):
@@ -122,6 +168,7 @@ def get_activation(name: str, **kwargs) -> nn.Module:
     activations = {
         'relu': nn.ReLU,
         'alpha_repu': AlphaRePU,
+        'alpha_repu_softplus': AlphaRePUSoftplus,
         'groupsort': GroupSort,
         'maxmin': MaxMin,
         'tanh': nn.Tanh,

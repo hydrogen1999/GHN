@@ -31,6 +31,7 @@ class GraphHolderLayer(nn.Module):
         c: Smoothing constant for α-RePU
         bias: Whether to include bias term
         cached: Whether to cache normalized adjacency
+        use_batch_norm: Whether to use batch normalization before activation
     """
     
     def __init__(
@@ -41,6 +42,7 @@ class GraphHolderLayer(nn.Module):
         c: float = 1e-4,
         bias: bool = True,
         cached: bool = True,
+        use_batch_norm: bool = True,
     ):
         super().__init__()
         
@@ -49,6 +51,7 @@ class GraphHolderLayer(nn.Module):
         self.alpha = alpha
         self.c = c
         self.cached = cached
+        self.use_batch_norm = use_batch_norm
         
         # Learnable parameters
         self.weight = nn.Parameter(torch.empty(in_features, out_features))
@@ -57,8 +60,14 @@ class GraphHolderLayer(nn.Module):
         else:
             self.register_parameter('bias', None)
         
-        # α-RePU activation
-        self.activation = AlphaRePU(alpha=alpha, c=c)
+        # Batch normalization (helps with training stability)
+        if use_batch_norm:
+            self.batch_norm = nn.BatchNorm1d(out_features)
+        else:
+            self.batch_norm = None
+        
+        # α-RePU activation (smooth version to avoid dying neurons)
+        self.activation = AlphaRePU(alpha=alpha, c=c, smooth=True)
         
         # Cache for normalized adjacency
         self._cached_adj_norm = None
@@ -66,10 +75,16 @@ class GraphHolderLayer(nn.Module):
         self.reset_parameters()
     
     def reset_parameters(self):
-        """Initialize parameters using Glorot initialization."""
-        nn.init.xavier_uniform_(self.weight)
+        """Initialize parameters using Kaiming initialization (better for deep nets)."""
+        # Use Kaiming initialization scaled for alpha
+        # Standard deviation accounts for the sub-linear activation
+        fan_in = self.in_features
+        std = math.sqrt(2.0 / fan_in) * (1.0 / self.alpha)  # Scale for α-RePU
+        nn.init.normal_(self.weight, mean=0, std=std)
+        
         if self.bias is not None:
-            nn.init.zeros_(self.bias)
+            # Small positive bias helps avoid dead neurons at initialization
+            nn.init.constant_(self.bias, 0.01)
     
     @staticmethod
     def normalize_adjacency(
@@ -162,6 +177,10 @@ class GraphHolderLayer(nn.Module):
         if self.bias is not None:
             output = output + self.bias
         
+        # Batch normalization (helps center activations)
+        if self.batch_norm is not None:
+            output = self.batch_norm(output)
+        
         # Apply α-RePU activation
         output = self.activation(output)
         
@@ -173,13 +192,19 @@ class GraphHolderLayer(nn.Module):
         Used for certified radius computation (Eq. 2).
         """
         with torch.no_grad():
+            weight = self.weight.data
+            m, n = weight.shape
+            
             # Power iteration for spectral norm estimation
-            u = torch.randn(self.in_features, device=self.weight.device)
+            u = torch.randn(m, device=weight.device)
+            u = F.normalize(u, dim=0)
+            
             for _ in range(10):  # 10 iterations as in paper
-                v = F.normalize(torch.mv(self.weight.t(), u), dim=0)
-                u = F.normalize(torch.mv(self.weight, v), dim=0)
-            sigma = torch.dot(u, torch.mv(self.weight, v))
-            return sigma.item()
+                v = F.normalize(torch.mv(weight.t(), u), dim=0)
+                u = F.normalize(torch.mv(weight, v), dim=0)
+            
+            sigma = torch.dot(u, torch.mv(weight, v))
+            return abs(sigma.item())
     
     def get_holder_constant(self, n_nodes: int) -> float:
         """
@@ -221,6 +246,7 @@ class GraphHolderNetwork(nn.Module):
         alpha: Hölder exponent (0 < α < 1)
         c: Smoothing constant for α-RePU
         dropout: Dropout probability
+        use_batch_norm: Use batch normalization in layers
     """
     
     def __init__(
@@ -232,6 +258,7 @@ class GraphHolderNetwork(nn.Module):
         alpha: float = 0.8,
         c: float = 1e-4,
         dropout: float = 0.5,
+        use_batch_norm: bool = True,
     ):
         super().__init__()
         
@@ -248,17 +275,23 @@ class GraphHolderNetwork(nn.Module):
         
         # Input layer
         self.layers.append(GraphHolderLayer(
-            in_features, hidden_features, alpha=alpha, c=c
+            in_features, hidden_features, alpha=alpha, c=c,
+            use_batch_norm=use_batch_norm
         ))
         
         # Hidden layers
         for _ in range(num_layers - 2):
             self.layers.append(GraphHolderLayer(
-                hidden_features, hidden_features, alpha=alpha, c=c
+                hidden_features, hidden_features, alpha=alpha, c=c,
+                use_batch_norm=use_batch_norm
             ))
         
         # Output layer (no activation, just linear readout)
         self.readout = nn.Linear(hidden_features, out_features)
+        
+        # Initialize readout layer
+        nn.init.xavier_uniform_(self.readout.weight)
+        nn.init.zeros_(self.readout.bias)
         
         self.dropout = nn.Dropout(dropout)
     
@@ -317,11 +350,17 @@ class GraphHolderNetwork(nn.Module):
         
         # Include readout layer
         with torch.no_grad():
-            u = torch.randn(self.hidden_features, device=self.readout.weight.device)
+            weight = self.readout.weight.data
+            m, n = weight.shape
+            
+            u = torch.randn(m, device=weight.device)
+            u = F.normalize(u, dim=0)
+            
             for _ in range(10):
-                v = F.normalize(torch.mv(self.readout.weight.t(), u), dim=0)
-                u = F.normalize(torch.mv(self.readout.weight, v), dim=0)
-            readout_norm = torch.dot(u, torch.mv(self.readout.weight, v)).item()
+                v = F.normalize(torch.mv(weight.t(), u), dim=0)
+                u = F.normalize(torch.mv(weight, v), dim=0)
+            
+            readout_norm = abs(torch.dot(u, torch.mv(weight, v)).item())
         
         c_net *= readout_norm
         
