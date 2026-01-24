@@ -18,6 +18,7 @@ GHN_CONFIG = {
     'alpha': 0.8,
     'c': 1e-4,
     'dropout': 0.5,
+    'use_batch_norm': False,
 }
 
 GCN_CONFIG = {
