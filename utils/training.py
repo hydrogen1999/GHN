@@ -125,6 +125,20 @@ class Trainer:
         # Loss only on training nodes
         loss = F.cross_entropy(logits[train_mask], labels[train_mask])
         
+        # --- Spectral Penalty: ||W|| to 1 ---
+        spectral_loss = 0.0
+        lambda_spec = 0.1 
+        
+        if hasattr(self.model, 'layers'):
+            for layer in self.model.layers:
+                if hasattr(layer, 'get_spectral_norm'):
+                    spec_norm = layer.get_spectral_norm()
+                    if spec_norm > 1.0:
+                        spectral_loss += (spec_norm - 1.0) ** 2
+        
+        loss = loss + lambda_spec * spectral_loss
+        # ---------------------------------------------------
+
         # Backward pass
         loss.backward()
         self.optimizer.step()
