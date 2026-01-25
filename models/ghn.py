@@ -81,6 +81,7 @@ class GraphHolderLayer(nn.Module):
         # fan_in = self.in_features
         # std = math.sqrt(2.0 / fan_in) * (1.0 / self.alpha)  # Scale for α-RePU
         # nn.init.normal_(self.weight, mean=0, std=std)
+        ### XAVIER
         nn.init.xavier_uniform_(self.weight)
         
         if self.bias is not None:
