@@ -78,13 +78,15 @@ class GraphHolderLayer(nn.Module):
         """Initialize parameters using Kaiming initialization (better for deep nets)."""
         # Use Kaiming initialization scaled for alpha
         # Standard deviation accounts for the sub-linear activation
-        fan_in = self.in_features
-        std = math.sqrt(2.0 / fan_in) * (1.0 / self.alpha)  # Scale for α-RePU
-        nn.init.normal_(self.weight, mean=0, std=std)
+        # fan_in = self.in_features
+        # std = math.sqrt(2.0 / fan_in) * (1.0 / self.alpha)  # Scale for α-RePU
+        # nn.init.normal_(self.weight, mean=0, std=std)
+        nn.init.xavier_uniform_(self.weight)
         
         if self.bias is not None:
             # Small positive bias helps avoid dead neurons at initialization
-            nn.init.constant_(self.bias, 0.01)
+            # nn.init.constant_(self.bias, 0.01)
+            nn.init.zeros_(self.bias)
     
     @staticmethod
     def normalize_adjacency(
@@ -258,7 +260,7 @@ class GraphHolderNetwork(nn.Module):
         alpha: float = 0.8,
         c: float = 1e-4,
         dropout: float = 0.5,
-        use_batch_norm: bool = True,
+        use_batch_norm: bool = False,
     ):
         super().__init__()
         
@@ -287,11 +289,15 @@ class GraphHolderNetwork(nn.Module):
             ))
         
         # Output layer (no activation, just linear readout)
-        self.readout = nn.Linear(hidden_features, out_features)
+        # self.readout = nn.Linear(hidden_features, out_features)
         
-        # Initialize readout layer
-        nn.init.xavier_uniform_(self.readout.weight)
-        nn.init.zeros_(self.readout.bias)
+        # # Initialize readout layer
+        # nn.init.xavier_uniform_(self.readout.weight)
+        # nn.init.zeros_(self.readout.bias)
+        self.layers.append(GraphHolderLayer(
+            hidden_features, out_features, alpha=alpha, c=c,
+            use_batch_norm=use_batch_norm 
+        ))
         
         self.dropout = nn.Dropout(dropout)
     
@@ -328,10 +334,11 @@ class GraphHolderNetwork(nn.Module):
             h = layer(h, adj, adj_normalized=adj_normalized)
         
         # Readout layer
-        h = self.dropout(h)
-        out = self.readout(h)
+        # h = self.dropout(h)
+        # out = self.readout(h)
         
-        return out
+        # return out
+        return h
     
     def get_network_holder_constant(self, n_nodes: int) -> float:
         """
@@ -352,21 +359,21 @@ class GraphHolderNetwork(nn.Module):
             spectral_norm = layer.get_spectral_norm()
             c_net *= spectral_norm ** self.alpha
         
-        # Include readout layer
-        with torch.no_grad():
-            weight = self.readout.weight.data
-            m, n = weight.shape
+        # # Include readout layer
+        # with torch.no_grad():
+        #     weight = self.readout.weight.data
+        #     m, n = weight.shape
             
-            u = torch.randn(m, device=weight.device)
-            u = F.normalize(u, dim=0)
+        #     u = torch.randn(m, device=weight.device)
+        #     u = F.normalize(u, dim=0)
             
-            for _ in range(10):
-                v = F.normalize(torch.mv(weight.t(), u), dim=0)
-                u = F.normalize(torch.mv(weight, v), dim=0)
+        #     for _ in range(10):
+        #         v = F.normalize(torch.mv(weight.t(), u), dim=0)
+        #         u = F.normalize(torch.mv(weight, v), dim=0)
             
-            readout_norm = abs(torch.dot(u, torch.mv(weight, v)).item())
+        #     readout_norm = abs(torch.dot(u, torch.mv(weight, v)).item())
         
-        c_net *= readout_norm
+        # c_net *= readout_norm
         
         return c_net
     
