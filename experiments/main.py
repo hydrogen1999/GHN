@@ -160,13 +160,14 @@ def run_table1(
                         model_results['acr'].append(cert['average_certified_radius'])
                     elif model_name == 'randomized_smoothing':
                         # Use model's built-in certification
-                        model.to(device)
-                        model.eval()
-                        _, cert_acc, avg_radius = model.certify_all_nodes(
-                            data.x.to(device), data.adj.to(device),
-                            data.test_mask.to(device), data.y.to(device),
-                        )
-                        model_results['acr'].append(avg_radius)
+                        # model.to(device)
+                        # model.eval()
+                        # _, cert_acc, avg_radius = model.certify_all_nodes(
+                        #     data.x.to(device), data.adj.to(device),
+                        #     data.test_mask.to(device), data.y.to(device),
+                        # )
+                        # model_results['acr'].append(avg_radius)
+                        continue
                     elif model_name == 'gnncert':
                         # Use GNNCert's certification
                         model.to(device)
