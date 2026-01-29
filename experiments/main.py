@@ -401,7 +401,7 @@ def run_table2(
     for model_name in models:
         set_seed(42)
         config = get_model_config(model_name)
-        model = get_model(model_name, data.num_features, data.num_classes, **config)
+        model = get_model(model_name, in_features=data.num_features, out_features=data.num_classes, **config)
         train_and_evaluate(model, data, get_training_config(), device, verbose=False)
         model.to(device)
         model.eval()
@@ -472,7 +472,7 @@ def run_table3(
     for model_name in models:
         set_seed(42)
         config = get_model_config(model_name)
-        model = get_model(model_name, data.num_features, data.num_classes, **config)
+        model = get_model(model_name, in_features=data.num_features, out_features=data.num_classes, **config)
         train_and_evaluate(model, data, get_training_config(), device, verbose=False)
         model.to(device)
         
@@ -497,7 +497,7 @@ def run_table3(
             
             # Retrain on poisoned graph
             set_seed(42)
-            model_poisoned = get_model(model_name, data.num_features, data.num_classes, **config)
+            model_poisoned = get_model(model_name, in_features=data.num_features, out_features=data.num_classes, **config)
             
             # Create poisoned data
             class PoisonedData:
@@ -555,7 +555,7 @@ def run_table4(
     for model_name in models:
         set_seed(42)
         config = get_model_config(model_name)
-        model = get_model(model_name, data.num_features, data.num_classes, **config)
+        model = get_model(model_name, in_features=data.num_features, out_features=data.num_classes, **config)
         train_and_evaluate(model, data, get_training_config(), device, verbose=False)
         model.to(device)
         model.eval()
@@ -906,7 +906,7 @@ def run_table9(
         config['hidden_features'] = 256
         config['num_layers'] = 3
         
-        model = get_model(model_name, data.num_features, data.num_classes, **config)
+        model = get_model(model_name, in_features=data.num_features, out_features=data.num_classes, **config)
         
         # Time training
         start = time.time()

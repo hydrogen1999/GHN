@@ -47,9 +47,6 @@ GHN achieves **2.3× larger certified radius** than the strongest baseline while
 ### Quick install
 
 ```bash
-# Clone repository
-git clone https://github.com/anonymous/ghn.git
-cd ghn
 
 # Install dependencies (GPU)
 make install
