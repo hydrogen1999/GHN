@@ -73,52 +73,6 @@ pip install numpy scipy tqdm matplotlib seaborn ogb
 
 ## 🚀 Quick start
 
-### Training GHN
-
-```python
-import torch
-from models import get_model
-from data.datasets import load_dataset, print_dataset_info
-from utils.training import train_and_evaluate, set_seed
-from certify.certification import certify_all_nodes
-from configs.default import get_model_config, get_training_config
-
-# Setup
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-set_seed(42)
-
-# Load dataset
-data = load_dataset('cora')
-print_dataset_info(data)
-
-# Create GHN model (α=0.8, L=2 layers)
-config = get_model_config('ghn')
-model = get_model(
-    'ghn',
-    in_features=data.num_features,
-    out_features=data.num_classes,
-    **config
-)
-
-# Train
-results = train_and_evaluate(model, data, get_training_config(), device)
-print(f"Test Accuracy: {results['test_accuracy']*100:.2f}%")
-
-# Certify robustness
-cert = certify_all_nodes(
-    model=model,
-    x=data.x.to(device),
-    adj=data.adj.to(device),
-    labels=data.y.to(device),
-    test_mask=data.test_mask.to(device),
-    model_type='ghn',
-    alpha=config['alpha'],
-    num_layers=config['num_layers'],
-)
-print(f"Average Certified Radius: {cert['average_certified_radius']:.4f}")
-print(f"Certified Accuracy @r=0.1: {cert['certified_accuracy@0.1']*100:.2f}%")
-```
-
 ### Using Makefile
 
 ```bash
