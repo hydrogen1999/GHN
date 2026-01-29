@@ -308,13 +308,13 @@ def run_figure2(
     # GHN
     set_seed(42)
     ghn_config = get_model_config('ghn')
-    ghn_model = get_model('ghn', data.num_features, data.num_classes, **ghn_config)
+    ghn_model = get_model('ghn', in_features=data.num_features, out_features=data.num_classes, **ghn_config)
     train_and_evaluate(ghn_model, data, get_training_config(), device, verbose=False)
     
     # GroupSort-GCN
     set_seed(42)
     lip_config = get_model_config('groupsort_gcn')
-    lip_model = get_model('groupsort_gcn', data.num_features, data.num_classes, **lip_config)
+    lip_model = get_model('groupsort_gcn', in_features=data.num_features, out_features=data.num_classes, **lip_config)
     train_and_evaluate(lip_model, data, get_training_config(), device, verbose=False)
     
     comparison = compare_scaling_behavior(
@@ -624,7 +624,7 @@ def run_figure3(
         config = get_model_config(model_type)
         config.update(extra_config)
         
-        model = get_model(model_type, data.num_features, data.num_classes, **config)
+        model = get_model(model_type, in_features=data.num_features, out_features=data.num_classes, **config)
         train_and_evaluate(model, data, get_training_config(), device, verbose=False)
         model.to(device)
         
@@ -675,7 +675,7 @@ def run_table5(
                 config = get_model_config(model_type)
                 config['num_layers'] = depth
                 
-                model = get_model(model_type, data.num_features, data.num_classes, **config)
+                model = get_model(model_type, in_features=data.num_features, out_features=data.num_classes, **config)
                 train_results = train_and_evaluate(model, data, get_training_config(), device, verbose=False)
                 accs.append(train_results['test_accuracy'])
                 
