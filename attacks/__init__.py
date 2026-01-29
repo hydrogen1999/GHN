@@ -547,6 +547,7 @@ def run_nettack_evaluation(
     x = x.to(device)
     adj_unnorm = adj_unnorm.to(device)
     labels = labels.to(device)
+    test_mask = test_mask.to(device)
     
     # Get test nodes that are correctly classified
     adj_norm = _normalize_adj(adj_unnorm, device)
@@ -555,11 +556,13 @@ def run_nettack_evaluation(
         preds = logits.argmax(dim=-1)
     
     test_indices = test_mask.nonzero().squeeze(-1)
-    correct_test = test_indices[(preds[test_indices] == labels[test_indices])]
+    correct_mask = (preds[test_indices] == labels[test_indices])
+    correct_test = test_indices[correct_mask]
     
     # Sample targets
     if len(correct_test) > num_targets:
-        target_indices = correct_test[torch.randperm(len(correct_test))[:num_targets]]
+        perm = torch.randperm(len(correct_test), device=correct_test.device)[:num_targets]
+        target_indices = correct_test[perm]
     else:
         target_indices = correct_test
     
@@ -571,8 +574,9 @@ def run_nettack_evaluation(
         budget = int(adj_unnorm[target].sum().item()) + 2
         adj_pert = attacker.attack(x, adj_unnorm, labels, target, budget=budget)
         
+        adj_pert_norm = _normalize_adj(adj_pert, device)
         with torch.no_grad():
-            logits_adv = model(x, adj_pert)
+            logits_adv = model(x, adj_pert_norm)
             if logits_adv[target].argmax().item() != labels[target].item():
                 successes += 1
     
