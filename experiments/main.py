@@ -729,8 +729,11 @@ def run_table6(
         for seed in seeds:
             set_seed(seed)
             model = GraphHolderNetwork(
-                data.num_features, data.num_classes,
-                hidden_features=64, num_layers=2, alpha=alpha,
+            in_features=data.num_features, 
+            out_features=data.num_classes, 
+            hidden_features=64, 
+            num_layers=2, 
+            alpha=alpha,
             )
             train_results = train_and_evaluate(model, data, get_training_config(), device, verbose=False)
             accs.append(train_results['test_accuracy'])
@@ -775,9 +778,13 @@ def run_table7(
         
         for seed in seeds:
             set_seed(seed)
+            # Trong hàm run_table7
             model = GraphHolderNetwork(
-                data.num_features, data.num_classes,
-                hidden_features=64, num_layers=depth, alpha=0.8,
+                in_features=data.num_features, 
+                out_features=data.num_classes, 
+                hidden_features=64, 
+                num_layers=depth, 
+                alpha=0.8,
             )
             train_results = train_and_evaluate(model, data, get_training_config(), device, verbose=False)
             accs.append(train_results['test_accuracy'])
