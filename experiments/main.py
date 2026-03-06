@@ -846,8 +846,11 @@ def run_table8(
             
             # Create model (spectral norm handled internally if supported)
             model = GraphHolderNetwork(
-                data.num_features, data.num_classes,
-                hidden_features=64, num_layers=2, alpha=0.8,
+            in_features=data.num_features, 
+            out_features=data.num_classes, 
+            hidden_features=64, 
+            num_layers=2, 
+            alpha=0.8,
             )
             
             train_config = get_training_config()
